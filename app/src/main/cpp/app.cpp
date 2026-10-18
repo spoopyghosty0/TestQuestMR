@@ -769,9 +769,9 @@ void App::frame() {
                 proj[eye].subImage.imageRect = {{0, 0}, {s.width, s.height}};
             }
             layer.space = local_;
-            if (!passthrough_mode_.empty())
-                layer.layerFlags =
-                    XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+            // the eye buffers hold premultiplied colour (cleared to 0, blended SRC_ALPHA / ONE_MINUS_SRC_ALPHA):
+            // flagging them unpremultiplied made the compositor apply alpha twice (overlay fills at alpha squared)
+            if (!passthrough_mode_.empty()) layer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
             layer.viewCount = 2;
             layer.views = proj.data();
             rendered = true;
