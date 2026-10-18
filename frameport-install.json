@@ -1,11 +1,11 @@
 {
   "schema": "framedrop.install/v1",
   "name": "Test Quest MR",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "files": [
     {
-      "url": "https://github.com/spoopyghosty0/TestQuestMR/releases/download/v0.2.0/TestQuestMR-0.2.0.apk",
-      "sha256": "d70803f30917b462c80d39bd8d0619a1f7108e19329438331b7a8b4f9f47bfed"
+      "url": "https://github.com/spoopyghosty0/TestQuestMR/releases/download/v0.2.1/TestQuestMR-0.2.1.apk",
+      "sha256": "bd25c68872e447b6f3c475caaa2a78912570ca0d9639472fcfd5679ed691c6ec"
     }
   ],
   "frameport": {
