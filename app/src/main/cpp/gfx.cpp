@@ -181,6 +181,34 @@ out vec4 o_color;
 void main() { o_color = v_color; }
 )";
 
+static const char *kTexVs = R"(#version 300 es
+in vec3 a_pos;
+in vec2 a_uv;
+in vec4 a_color;
+uniform mat4 u_mvp;
+out vec2 v_uv;
+out vec4 v_color;
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = u_mvp * vec4(a_pos, 1.0);
+}
+)";
+
+static const char *kTexFs = R"(#version 300 es
+precision mediump float;
+in vec2 v_uv;
+in vec4 v_color;
+uniform sampler2D u_tex;
+uniform float u_image;
+out vec4 o_color;
+void main() {
+    vec4 t = texture(u_tex, v_uv);
+    // glyphs: coverage in R; image: premultiplied RGBA, scaled by the vertex alpha
+    o_color = u_image > 0.5 ? t * v_color.a : vec4(v_color.rgb, v_color.a * t.r);
+}
+)";
+
 static void make_sphere(Mesh &mesh) {
     std::vector<float> v;
     std::vector<uint32_t> idx;
@@ -211,6 +239,34 @@ bool Renderer::init() {
     flat_ = program(kFlatVs, kFlatFs);
     flat_mvp_ = glGetUniformLocation(flat_, "u_mvp");
     flat_alpha_ = glGetUniformLocation(flat_, "u_alpha");
+    {
+        GLuint p = glCreateProgram();
+        glAttachShader(p, compile(GL_VERTEX_SHADER, kTexVs));
+        glAttachShader(p, compile(GL_FRAGMENT_SHADER, kTexFs));
+        glBindAttribLocation(p, 0, "a_pos");
+        glBindAttribLocation(p, 1, "a_uv");
+        glBindAttribLocation(p, 2, "a_color");
+        glLinkProgram(p);
+        GLint ok = 0;
+        glGetProgramiv(p, GL_LINK_STATUS, &ok);
+        if (!ok) LOGE("text program link failed");
+        tex_ = p;
+        tex_mvp_ = glGetUniformLocation(p, "u_mvp");
+        tex_image_ = glGetUniformLocation(p, "u_image");
+        glUseProgram(p);
+        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glGenVertexArrays(1, &tex_vao_);
+        glBindVertexArray(tex_vao_);
+        glGenBuffers(1, &tex_vbo_);
+        glBindBuffer(GL_ARRAY_BUFFER, tex_vbo_);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(TexVertex), nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(TexVertex), (void *)(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(TexVertex), (void *)(5 * sizeof(float)));
+        glBindVertexArray(0);
+    }
     glGenVertexArrays(1, &flat_vao_);
     glBindVertexArray(flat_vao_);
     glGenBuffers(1, &flat_vbo_);
@@ -218,7 +274,7 @@ bool Renderer::init() {
     flat_attribs();
     glBindVertexArray(0);
     make_sphere(sphere);
-    return lit_ && flat_;
+    return lit_ && flat_ && tex_;
 }
 
 void Renderer::begin_eye(const Mat4 &view_proj) { view_proj_ = view_proj; }
@@ -258,18 +314,41 @@ void Renderer::draw_buffer(const FlatBuffer &buffer, GLenum mode, const Mat4 &mo
     glDrawArrays(mode, 0, buffer.count);
 }
 
-void EyeTarget::create(const std::vector<GLuint> &color_textures, int w, int h) {
+void Renderer::textured(const std::vector<TexVertex> &v, GLuint texture, bool image) {
+    if (v.empty()) return;
+    glUseProgram(tex_);
+    glUniformMatrix4fv(tex_mvp_, 1, GL_FALSE, view_proj_.m);
+    glUniform1f(tex_image_, image ? 1.0f : 0.0f);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindVertexArray(tex_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, tex_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(TexVertex), v.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)v.size());
+}
+
+void Renderer::draw_text(const std::vector<TexVertex> &quads, GLuint atlas) { textured(quads, atlas, false); }
+
+void Renderer::draw_image(const std::vector<TexVertex> &quads, GLuint texture) {
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    textured(quads, texture, true);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void EyeTarget::create(const std::vector<GLuint> &color_textures, int w, int h, bool depth_buffer) {
     width = w;
     height = h;
-    glGenRenderbuffers(1, &depth);
-    glBindRenderbuffer(GL_RENDERBUFFER, depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    if (depth_buffer) {
+        glGenRenderbuffers(1, &depth);
+        glBindRenderbuffer(GL_RENDERBUFFER, depth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    }
     fbos.resize(color_textures.size());
     glGenFramebuffers((GLsizei)fbos.size(), fbos.data());
     for (size_t i = 0; i < fbos.size(); ++i) {
         glBindFramebuffer(GL_FRAMEBUFFER, fbos[i]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_textures[i], 0);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+        if (depth) glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
         GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE) LOGE("framebuffer incomplete: 0x%x", status);
     }

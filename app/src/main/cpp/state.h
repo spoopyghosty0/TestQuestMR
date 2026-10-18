@@ -136,6 +136,9 @@ struct ViewOptions {
     int tab = kTabRoom;
     int log_scroll = 0;   // lines up from the newest
     int room_scroll = 0;  // entities down from the first
+    // percent: the room visualisation (fills and mesh fade to nothing, outlines and label plates to a faint minimum)
+    // and the panel's background
+    int overlay_opacity = 100, panel_opacity = 100;
 };
 
 const char *source_mode_name(int mode);

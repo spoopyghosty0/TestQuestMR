@@ -1,4 +1,5 @@
-// Controllers: aim and grip poses, trigger (select), grip (squeeze, places an anchor), thumbstick (scrolls lists).
+// Controllers: aim and grip poses, trigger (select, drags sliders), grip (squeeze, places an anchor), thumbstick
+// (scrolls lists, moves a slider sideways).
 // Bindings for Touch controllers and the Khronos simple controller.
 #pragma once
 
@@ -17,9 +18,10 @@ public:
     bool aim_valid[2] = {false, false}, grip_valid[2] = {false, false};
     Pose aim[2], grip[2];
     float trigger[2] = {0, 0}, squeeze[2] = {0, 0};
-    float stick_y[2] = {0, 0};
+    float stick_x[2] = {0, 0}, stick_y[2] = {0, 0};
     bool trigger_pressed(int h) const { return trigger[h] > 0.6f && !trigger_was_[h]; }
     bool squeeze_pressed(int h) const { return squeeze[h] > 0.7f && !squeeze_was_[h]; }
+    bool trigger_held(int h) const { return trigger[h] > 0.35f; }  // a drag lasts until the trigger is let go
 
 private:
     XrInstance instance_ = XR_NULL_HANDLE;

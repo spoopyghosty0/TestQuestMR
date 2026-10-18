@@ -1,5 +1,6 @@
 // What the app draws: the room as the runtime describes it (planes, volumes, mesh, anchors, STAGE bounds), labels,
-// the panel and the pointer rays. Shared by the app and the PC renderer (tools/render_host).
+// the pointer rays, and the panel into its own texture (a quad layer on the headset). Shared by the app and the PC
+// renderer (tools/render_host).
 #pragma once
 
 #include <map>
@@ -31,8 +32,17 @@ public:
     bool init() { return renderer.init(); }
     // Places the panel in front of `user` (a pose with yaw only); call before hit tests and draw().
     void layout(const Pose &user);
-    // Draws everything for one eye into the bound framebuffer (cleared by the caller).
+    // Draws the room, labels and rays for one eye into the bound framebuffer (cleared by the caller); not the panel.
     void draw(const Mat4 &view_proj, SceneData &d);
+    // Panel texture size for kPanelTexelsPerUnit.
+    int panel_texture_width() const { return (int)(panel.width * kPanelTexelsPerUnit); }
+    int panel_texture_height() const { return (int)(panel.height * kPanelTexelsPerUnit); }
+    // Draws the panel and the pointer cursors on it into the bound framebuffer (w x h texels; cleared here to
+    // transparent; premultiplied alpha).
+    void render_panel(SceneData &d, int w, int h);
+    // Draws the panel texture where it hangs, over everything: what the compositor does with the quad layer (the PC
+    // renderer).
+    void composite_panel(const Mat4 &view_proj, GLuint texture);
 
 private:
     struct MeshCache {

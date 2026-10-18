@@ -5,10 +5,9 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
-#include <functional>
 
+#include "font.h"
 #include "mrlog.h"
-#include "stb_easy_font.h"
 
 namespace {
 const float kBg[4] = {0.012f, 0.014f, 0.02f, 1.0f};
@@ -27,26 +26,6 @@ const float kWarn[4] = {1.0f, 0.78f, 0.25f, 1};
 const float kRule[4] = {0.12f, 0.13f, 0.17f, 1};
 
 const float *level_color(int level) { return level == 1 ? kGood : level == 2 ? kBad : kText; }
-
-// stb_easy_font emits quads of 4 vertices: x, y, z, packed colour (16 bytes each)
-struct StbVertex {
-    float x, y, z;
-    unsigned char c[4];
-};
-
-void emit_quads(std::vector<FlatVertex> &t, const std::string &s, const float color[4],
-                const std::function<Vec3(float, float)> &map) {
-    static StbVertex buf[12000];
-    int quads = stb_easy_font_print(0, 0, const_cast<char *>(s.c_str()), nullptr, buf, sizeof(buf));
-    for (int q = 0; q < quads; ++q) {
-        const StbVertex *v = &buf[q * 4];
-        const int order[6] = {0, 1, 2, 0, 2, 3};
-        for (int k : order) {
-            Vec3 w = map(v[k].x, v[k].y);
-            t.push_back({w.x, w.y, w.z, color[0], color[1], color[2], color[3]});
-        }
-    }
-}
 
 std::string fmt(const char *f, ...) __attribute__((format(printf, 1, 2)));
 std::string fmt(const char *f, ...) {
@@ -74,7 +53,7 @@ const char *component_short(XrSpaceComponentTypeFB t) {
 }
 }  // namespace
 
-float text_width(const std::string &s) { return (float)stb_easy_font_width(const_cast<char *>(s.c_str())); }
+float text_width(const std::string &s) { return font::width(s); }
 
 std::string fit_text(const std::string &s, float width, float scale) {
     if (text_width(s) * scale <= width) return s;
@@ -83,19 +62,14 @@ std::string fit_text(const std::string &s, float width, float scale) {
     return out + "...";
 }
 
-Vec3 Panel::to_world(float u, float v, float z) const {
-    return pose.apply(Vec3((u - width / 2) * px, (height / 2 - v) * px, z));
+void Panel::rect(std::vector<FlatVertex> &t, float x0, float y0, float x1, float y1, const float c[4], float) {
+    float a = c[3] * alpha_;
+    const float pts[6][2] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y0}, {x1, y1}, {x0, y1}};
+    for (auto &p : pts) t.push_back({p[0], p[1], 0, c[0], c[1], c[2], a});
 }
 
-void Panel::rect(std::vector<FlatVertex> &t, float x0, float y0, float x1, float y1, const float c[4], float z) const {
-    Vec3 a = to_world(x0, y0, z), b = to_world(x1, y0, z), cc = to_world(x1, y1, z), d = to_world(x0, y1, z);
-    for (const Vec3 &p : {a, b, cc, a, cc, d}) t.push_back({p.x, p.y, p.z, c[0], c[1], c[2], c[3]});
-}
-
-float Panel::text(std::vector<FlatVertex> &t, float x, float y, float scale, const std::string &s,
-                  const float c[4]) const {
-    emit_quads(t, s, c, [&](float gx, float gy) { return to_world(x + gx * scale, y + gy * scale, 0.002f); });
-    return x + text_width(s) * scale;
+float Panel::text(std::vector<FlatVertex> &, float x, float y, float scale, const std::string &s, const float c[4]) {
+    return panel_atlas().emit(*glyphs_, s, x, y, scale, c, [](float gx, float gy) { return Vec3(gx, gy, 0); });
 }
 
 float Panel::button(std::vector<FlatVertex> &t, const PanelInfo &info, int id, float x, float y,
@@ -104,15 +78,50 @@ float Panel::button(std::vector<FlatVertex> &t, const PanelInfo &info, int id, f
     PanelItem it{id, x, y, x + w, y + 16};
     items_.push_back(it);
     const float *bg = info.pressed == id ? kPressed : info.hover == id ? kHover : on ? kOn : kRow;
+    float keep = alpha_;
+    alpha_ = 0.6f + 0.4f * keep;  // controls stay visible on a see-through panel
     rect(t, it.x0, it.y0, it.x1, it.y1, bg, 0.001f);
+    alpha_ = keep;
     text(t, x + (w - text_width(label)) / 2, y + 4, 1, label, kText);
     return x + w + 6;
 }
 
-void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t) {
+float Panel::slider(std::vector<FlatVertex> &t, const PanelInfo &info, int id, float x, float y,
+                    const std::string &label, int percent, float track_w) {
+    x = text(t, x, y + 4, 1, label, kText) + 12;
+    PanelItem it{id, x - 8, y - 3, x + track_w + 8, y + 19, true, x, x + track_w};
+    items_.push_back(it);
+    bool active = info.hover == id || info.dragging == id;
+    float keep = alpha_;
+    alpha_ = 1;
+    const float track[4] = {0.16f, 0.17f, 0.22f, 1};
+    float at = x + track_w * std::clamp(percent, 0, 100) / 100.0f;
+    rect(t, x, y + 6, x + track_w, y + 10, track);
+    rect(t, x, y + 6, at, y + 10, active ? kPressed : kOn);
+    rect(t, at - 4, y, at + 4, y + 16, active ? kHead : kText);
+    alpha_ = keep;
+    return text(t, x + track_w + 12, y + 4, 1, fmt("%d %%", percent), active ? kHead : kText);
+}
+
+const PanelItem *Panel::item(int id) const {
+    for (const PanelItem &it : items_)
+        if (it.id == id) return &it;
+    return nullptr;
+}
+
+float Panel::slider_value(int id, float u) const {
+    for (const PanelItem &it : items_)
+        if (it.id == id && it.slider && it.track1 > it.track0)
+            return std::clamp((u - it.track0) / (it.track1 - it.track0), 0.0f, 1.0f);
+    return 0;
+}
+
+void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t, std::vector<TexVertex> &glyphs) {
     items_.clear();
+    glyphs_ = &glyphs;
     const MrState &mr = *info.mr;
     const ViewOptions &view = *info.view;
+    alpha_ = std::clamp(view.panel_opacity, 0, 100) / 100.0f;
     rect(t, 0, 0, width, height, kBg, 0);
 
     float x = text(t, 16, 12, 2.0f, "Test Quest MR", kHead);
@@ -153,6 +162,10 @@ void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t) {
                mr.boundary_suppress_requested ? "Boundary: show" : "Boundary: hide");
     button(t, info, kBtnRecenter, x, y, "Recenter panel");
     y += 22;
+    x = text(t, 16, y + 4, 1, "Opacity", kDim) + 10;
+    x = slider(t, info, kSliderOverlay, x, y, "Room overlay", view.overlay_opacity, 220);
+    slider(t, info, kSliderPanel, x + 36, y, "Panel background", view.panel_opacity, 160);
+    y += 24;
     if (!info.message.empty()) text(t, 16, y + 2, 1, fit_text(info.message, width - 32), kWarn);
     y += 14;
     rect(t, 12, y, width - 12, y + 1, kRule, 0.001f);
@@ -372,7 +385,7 @@ void Panel::log_tab(std::vector<FlatVertex> &t, const PanelInfo &info, float y) 
     text(t, 16, height - 14, 1, fit_text(foot, width - 32), kDim);
 }
 
-bool Panel::hit(const Pose &aim, float &u, float &v, Vec3 &world) const {
+bool Panel::hit(const Pose &aim, float &u, float &v, Vec3 &world, bool bounded) const {
     Vec3 origin = aim.p, dir = aim.q.rotate({0, 0, -1});
     Vec3 n = pose.q.rotate({0, 0, 1});
     float denom = dot(dir, n);
@@ -383,7 +396,7 @@ bool Panel::hit(const Pose &aim, float &u, float &v, Vec3 &world) const {
     Vec3 local = pose.inverse().apply(world);
     u = local.x / px + width / 2;
     v = height / 2 - local.y / px;
-    return u >= 0 && u <= width && v >= 0 && v <= height;
+    return !bounded || (u >= 0 && u <= width && v >= 0 && v <= height);
 }
 
 int Panel::item_at(float u, float v) const {
@@ -392,8 +405,8 @@ int Panel::item_at(float u, float v) const {
     return -1;
 }
 
-void world_label(std::vector<FlatVertex> &tris, const Pose &pose, float m, const std::vector<std::string> &lines,
-                 const float color[4], const float plate[4]) {
+void world_label(std::vector<FlatVertex> &plates, std::vector<TexVertex> &glyphs, const Pose &pose, float m,
+                 const std::vector<std::string> &lines, const float color[4], const float plate[4]) {
     float w = 0;
     for (const std::string &l : lines) w = std::max(w, text_width(l));
     const float line_h = 11;
@@ -402,12 +415,9 @@ void world_label(std::vector<FlatVertex> &tris, const Pose &pose, float m, const
     float x0 = -w / 2 - 4, x1 = w / 2 + 4, y0 = -3, y1 = h + 1;
     auto at = [&](float gx, float gy, float z) { return pose.apply(Vec3(gx * m, (h / 2 - gy) * m, z)); };
     Vec3 a = at(x0, y0, -0.001f), b = at(x1, y0, -0.001f), c = at(x1, y1, -0.001f), d = at(x0, y1, -0.001f);
-    for (const Vec3 &p : {a, b, c, a, c, d}) tris.push_back({p.x, p.y, p.z, plate[0], plate[1], plate[2], plate[3]});
-    for (size_t i = 0; i < lines.size(); ++i) {
-        float lw = text_width(lines[i]);
-        const float *col = color;
-        static const float kSub[4] = {0.75f, 0.77f, 0.82f, 1};
-        if (i > 0) col = kSub;
-        emit_quads(tris, lines[i], col, [&](float gx, float gy) { return at(gx - lw / 2, gy + i * line_h, 0); });
-    }
+    for (const Vec3 &p : {a, b, c, a, c, d}) plates.push_back({p.x, p.y, p.z, plate[0], plate[1], plate[2], plate[3]});
+    static const float kSub[4] = {0.75f, 0.77f, 0.82f, 1};
+    for (size_t i = 0; i < lines.size(); ++i)
+        label_atlas().emit(glyphs, lines[i], -text_width(lines[i]) / 2, i * line_h, 1, i ? kSub : color,
+                           [&](float gx, float gy) { return at(gx, gy, 0); });
 }

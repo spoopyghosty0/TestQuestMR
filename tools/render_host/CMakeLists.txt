@@ -14,8 +14,16 @@ foreach(h openxr.h openxr_platform_defines.h openxr_reflection.h)
     endif()
 endforeach()
 
-add_executable(render_host main.cpp xr_stubs.cpp ${APP}/scene.cpp ${APP}/gfx.cpp ${APP}/ui.cpp ${APP}/mr.cpp
+# the font the app finds on Android (/system/fonts/Roboto-Regular.ttf), for screenshots that look like the headset
+set(ROBOTO ${CMAKE_BINARY_DIR}/Roboto-Regular.ttf)
+if(NOT EXISTS ${ROBOTO})
+    file(DOWNLOAD https://raw.githubusercontent.com/googlefonts/roboto/v2.138/src/hinted/Roboto-Regular.ttf ${ROBOTO}
+         STATUS st)
+endif()
+
+add_executable(render_host main.cpp xr_stubs.cpp ${APP}/scene.cpp ${APP}/font.cpp ${APP}/gfx.cpp ${APP}/ui.cpp ${APP}/mr.cpp
                ${APP}/mrlog.cpp ${APP}/state.cpp ${APP}/demo_room.cpp ${APP}/xrnames.cpp)
 target_include_directories(render_host PRIVATE ${APP} ${CMAKE_BINARY_DIR}/include ${THIRD_PARTY}/stb)
+target_compile_definitions(render_host PRIVATE TQMR_HOST_FONT="${ROBOTO}")
 target_compile_options(render_host PRIVATE -Wall -Wno-unused-function)
 target_link_libraries(render_host PRIVATE EGL GLESv2)

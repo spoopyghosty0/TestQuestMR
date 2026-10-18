@@ -105,7 +105,9 @@ void Input::sync(XrSession session, XrSpace base, XrTime time) {
         squeeze[h] = XR_SUCCEEDED(xrGetActionStateFloat(session, &get, &f)) && f.isActive ? f.currentState : 0;
         XrActionStateVector2f v{XR_TYPE_ACTION_STATE_VECTOR2F};
         get.action = stick_;
-        stick_y[h] = XR_SUCCEEDED(xrGetActionStateVector2f(session, &get, &v)) && v.isActive ? v.currentState.y : 0;
+        bool stick = XR_SUCCEEDED(xrGetActionStateVector2f(session, &get, &v)) && v.isActive;
+        stick_x[h] = stick ? v.currentState.x : 0;
+        stick_y[h] = stick ? v.currentState.y : 0;
         for (int k = 0; k < 2; ++k) {
             XrSpace space = k ? grip_space_[h] : aim_space_[h];
             XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};

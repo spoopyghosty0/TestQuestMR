@@ -17,6 +17,7 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -75,6 +76,7 @@ private:
     std::set<std::string> enabled_;
     std::vector<XrViewConfigurationView> view_configs_;
     Swap swaps_[2];
+    Swap panel_swap_;  // the panel, shown as a quad layer
     std::string files_;
 
     // passthrough: XR_FB_passthrough (Quest; what Quest MR games use), else the ALPHA_BLEND blend mode
@@ -86,7 +88,9 @@ private:
     bool placed_ = false, demo_ = false, demo_done_ = false;
     Pose user_, head_;
     int hover_ = -1, pressed_ = -1;
-    double pressed_at_ = 0, scroll_at_ = 0, message_at_ = 0, permission_check_ = 0;
+    int drag_id_ = -1, drag_hand_ = -1;  // slider held with the trigger
+    double pressed_at_ = 0, scroll_at_ = 0, message_at_ = 0, permission_check_ = 0, nudge_at_ = 0;
+    double save_at_ = -1;  // save settings at this time (after a thumbstick nudge)
     std::string message_;
     bool permission_granted_ = true;
 
@@ -103,6 +107,8 @@ private:
     void frame();
     void update_ui(XrTime time);
     void press(int id, int hand);
+    int &slider_value(int id) { return id == kSliderPanel ? view_.panel_opacity : view_.overlay_opacity; }
+    void set_slider(int id, int percent, int hand);
     void place(XrTime time);
     void clamp_scroll() {
         const MrState &st = mr_.st;
@@ -132,6 +138,8 @@ void App::load_settings() {
         else if (key == "labels") view_.labels = value != 0;
         else if (key == "axes") view_.gizmos = value != 0;
         else if (key == "boundary") view_.boundary = value != 0;
+        else if (key == "overlay_opacity") view_.overlay_opacity = std::clamp(value, 0, 100);
+        else if (key == "panel_opacity") view_.panel_opacity = std::clamp(value, 0, 100);
     }
 }
 
@@ -139,7 +147,8 @@ void App::save_settings() {
     std::ofstream f(files_ + "/settings.txt");
     f << "passthrough " << view_.passthrough << "\nsource " << view_.source << "\nmesh " << view_.mesh << "\ntab "
       << view_.tab << "\nplanes " << view_.planes << "\nvolumes " << view_.volumes << "\nlabels " << view_.labels
-      << "\naxes " << view_.gizmos << "\nboundary " << view_.boundary << "\n";
+      << "\naxes " << view_.gizmos << "\nboundary " << view_.boundary << "\noverlay_opacity " << view_.overlay_opacity
+      << "\npanel_opacity " << view_.panel_opacity << "\n";
 }
 
 // ---------------------------------------------------------------- permissions
@@ -393,6 +402,37 @@ bool App::open_session() {
         for (const auto &img : s.images) tex.push_back(img.image);
         s.target.create(tex, s.width, s.height);
     }
+    {
+        // the panel: its own swapchain at kPanelTexelsPerUnit (1800 x 1364, a little more than one texel per display
+        // pixel at its distance), composited as a quad layer: sampled once by the compositor instead of drawn into
+        // the eye buffers and resampled again
+        Swap &s = panel_swap_;
+        XrSwapchainCreateInfo sc{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+        sc.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        sc.format = color_format;
+        sc.sampleCount = 1;
+        sc.width = (uint32_t)scene_.panel_texture_width();
+        sc.height = (uint32_t)scene_.panel_texture_height();
+        sc.faceCount = 1;
+        sc.arraySize = 1;
+        sc.mipCount = 1;
+        r = xrCreateSwapchain(session_, &sc, &s.handle);
+        MrLog::get().add(XR_FAILED(r) ? 2 : 0, "panel: xrCreateSwapchain(%ux%u) -> %s", sc.width, sc.height,
+                         xr_result_str(r));
+        if (XR_SUCCEEDED(r)) {
+            s.width = (int)sc.width;
+            s.height = (int)sc.height;
+            uint32_t n = 0;
+            xrEnumerateSwapchainImages(s.handle, 0, &n, nullptr);
+            s.images.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
+            xrEnumerateSwapchainImages(s.handle, n, &n, (XrSwapchainImageBaseHeader *)s.images.data());
+            std::vector<GLuint> tex;
+            for (const auto &img : s.images) tex.push_back(img.image);
+            s.target.create(tex, s.width, s.height, false);
+        } else {
+            s.handle = XR_NULL_HANDLE;
+        }
+    }
     r = input_.attach(session_);
     MrLog::get().add(XR_FAILED(r) ? 2 : 0, "xrAttachSessionActionSets -> %s", xr_result_str(r));
     uint32_t n = 0;
@@ -409,7 +449,8 @@ void App::close_session() {
     stop_passthrough();
     mr_.on_session_end();
     input_.destroy();
-    for (auto &s : swaps_) {
+    for (Swap *sp : {&swaps_[0], &swaps_[1], &panel_swap_}) {
+        Swap &s = *sp;
         s.target.release();
         if (s.handle) xrDestroySwapchain(s.handle);
         s.handle = XR_NULL_HANDLE;
@@ -540,6 +581,14 @@ void App::press(int id, int hand) {
     save_settings();
 }
 
+void App::set_slider(int id, int percent, int hand) {
+    int &value = slider_value(id);
+    percent = std::clamp(percent, 0, 100);
+    if (percent == value) return;
+    if (percent / 10 != value / 10 || percent == 0 || percent == 100) input_.vibrate(session_, hand, 0.15f, 0.01f);  // a tick per 10 %
+    value = percent;
+}
+
 void App::update_ui(XrTime time) {
     double t = now_s();
     scene_.layout(user_);
@@ -547,10 +596,38 @@ void App::update_ui(XrTime time) {
     for (int h = 0; h < 2; ++h) {
         float u, v;
         Vec3 w;
+        // a slider held with this hand's trigger follows the pointer along the panel's plane, past its edges too
+        if (drag_hand_ == h) {
+            if (!input_.trigger_held(h) || !input_.aim_valid[h]) {
+                drag_id_ = drag_hand_ = -1;
+                save_settings();
+            } else {
+                if (scene_.panel.hit(input_.aim[h], u, v, w, false))
+                    set_slider(drag_id_, (int)std::lround(scene_.panel.slider_value(drag_id_, u) * 100), h);
+                hover = drag_id_;
+                continue;
+            }
+        }
         bool on_panel = input_.aim_valid[h] && scene_.panel.hit(input_.aim[h], u, v, w);
         int item = on_panel ? scene_.panel.item_at(u, v) : -1;
         if (item >= 0) hover = item;
-        if (input_.trigger_pressed(h) && item >= 0) press(item, h);
+        bool slider = item >= 0 && scene_.panel.is_slider(item);
+        if (input_.trigger_pressed(h) && slider && drag_id_ < 0) {
+            drag_id_ = item;
+            drag_hand_ = h;
+            input_.vibrate(session_, h, 0.4f, 0.02f);
+            set_slider(item, (int)std::lround(scene_.panel.slider_value(item, u) * 100), h);
+            continue;
+        }
+        if (input_.trigger_pressed(h) && item >= 0 && !slider) press(item, h);
+        // thumbstick sideways on a slider: 5 % steps (held: repeats)
+        if (slider && std::fabs(input_.stick_x[h]) > 0.6f && t - nudge_at_ > 0.12) {
+            nudge_at_ = t;
+            int &value = slider_value(item);
+            set_slider(item, (value / 5 + (input_.stick_x[h] > 0 ? 1 : (value % 5 ? 0 : -1))) * 5, h);
+            save_at_ = t + 1.0;
+            continue;  // no scrolling while nudging
+        }
         // grip: an anchor at that controller (pointing at the panel or not)
         if (input_.squeeze_pressed(h) && input_.grip_valid[h]) {
             if (demo_) say("demo mode: anchors are synthetic");
@@ -571,6 +648,10 @@ void App::update_ui(XrTime time) {
         }
     }
     hover_ = hover;
+    if (save_at_ >= 0 && t > save_at_) {
+        save_at_ = -1;
+        save_settings();
+    }
     if (pressed_ >= 0 && t - pressed_at_ > 0.15) pressed_ = -1;
     if (!message_.empty() && t - message_at_ > 6) message_.clear();
     if (!permission_granted_ && t - permission_check_ > 1.0) {
@@ -592,7 +673,9 @@ void App::frame() {
     XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
     XrCompositionLayerPassthroughFB pt_layer{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
     pt_layer.layerHandle = pt_layer_;
-    const XrCompositionLayerBaseHeader *layers[2];
+    XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    bool panel_rendered = false;
+    const XrCompositionLayerBaseHeader *layers[3];
     uint32_t layer_count = 0;
     bool rendered = false;
 
@@ -633,6 +716,31 @@ void App::frame() {
             d.panel.message = message_;
             d.panel.log_file = MrLog::get().path().empty() ? "" : "mr-log.txt in the app's files folder";
             d.panel.session_state = session_state_name(state_);
+            d.panel.dragging = drag_id_;
+            if (panel_swap_.handle) {
+                Swap &s = panel_swap_;
+                uint32_t image = 0;
+                XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+                XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+                wi.timeout = XR_INFINITE_DURATION;
+                if (XR_SUCCEEDED(xrAcquireSwapchainImage(s.handle, &ai, &image)) &&
+                    XR_SUCCEEDED(xrWaitSwapchainImage(s.handle, &wi))) {
+                    glBindFramebuffer(GL_FRAMEBUFFER, s.target.fbos[image]);
+                    scene_.render_panel(d, s.width, s.height);
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+                    xrReleaseSwapchainImage(s.handle, &ri);
+                    // premultiplied alpha (the panel's background opacity), over the projection layer
+                    quad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                    quad.space = local_;
+                    quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                    quad.subImage.swapchain = s.handle;
+                    quad.subImage.imageRect = {{0, 0}, {s.width, s.height}};
+                    quad.pose = scene_.panel.pose.xr();
+                    quad.size = {scene_.panel.width * scene_.panel.px, scene_.panel.height * scene_.panel.px};
+                    panel_rendered = true;
+                }
+            }
             for (int eye = 0; eye < 2; ++eye) {
                 Swap &s = swaps_[eye];
                 uint32_t image = 0;
@@ -675,6 +783,7 @@ void App::frame() {
         passthrough_mode_ == "ALPHA_BLEND" ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     if (pt_layer_) layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&pt_layer;  // under the scene
     if (rendered) layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&layer;
+    if (rendered && panel_rendered) layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&quad;
     end.layerCount = layer_count;
     end.layers = layer_count ? layers : nullptr;
     XrResult r = xrEndFrame(session_, &end);
@@ -699,6 +808,9 @@ void App::run() {
     permission_granted_ = true;
     check_permission(true);
 
+    // the system's font (Roboto on Android); stb_easy_font if none can be read
+    font::load({"/system/fonts/Roboto-Regular.ttf", "/system/fonts/NotoSans-Regular.ttf", "/system/fonts/DroidSans.ttf"});
+    MLOG("font: %s", font::name().c_str());
     if (!gl_.init() || !scene_.init()) {
         MERR("startup failed");
         exit_ = true;

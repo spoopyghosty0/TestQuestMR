@@ -3,12 +3,14 @@
 //
 //   render_host <out.ppm> <shot> [width height]      (shot icon: RGBA PAM)
 //
-// Shots: room (inside view with the panel), overview (the whole room, no panel), both (FB + META overlay),
+// Shots: room (inside view with the panel), opacity (the same, overlay at 40 %, panel at 75 %), eye (the panel from
+// where the user stands, ~25 pixels per degree), overview (the whole room, no panel), both (FB + META overlay),
 // wire (mesh wireframe), runtime / roomtab / anchors / log (the panel's tabs, close up), icon (for gen_icon.py).
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -53,8 +55,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // 4x supersampled, like the headset's resolution per degree, then box-filtered down
-    const int ss = 2, W = w * ss, H = h * ss;
+    // 4x supersampled, then box-filtered down (TQMR_SS=1: one sample per pixel, like the headset's eye buffers)
+    const char *ss_env = std::getenv("TQMR_SS");
+    const int ss = ss_env ? std::max(1, std::atoi(ss_env)) : 2, W = w * ss, H = h * ss;
     GLuint tex, depth, fbo;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -69,6 +72,8 @@ int main(int argc, char **argv) {
 
     Scene scene;
     scene.init();
+    const char *font_env = std::getenv("TQMR_FONT");  // TQMR_FONT=none: the stb_easy_font fallback
+    font::load({font_env ? font_env : TQMR_HOST_FONT});
 
     // what a Quest-like runtime answers, and the synthetic room in STAGE = base space
     MrState st;
@@ -113,18 +118,37 @@ int main(int argc, char **argv) {
     Pose cam = look_at(cam_at, user.apply({0.25f, -0.6f, -1.6f}));
     float hfov = 44, vfov = 36;  // half angles
     bool panel_close = shot == "runtime" || shot == "roomtab" || shot == "anchors" || shot == "log";
-    if (shot == "room" || shot == "both" || shot == "wire") {
-        d.show_panel = shot == "room";
+    if (shot == "room" || shot == "both" || shot == "wire" || shot == "opacity") {
+        d.show_panel = shot == "room" || shot == "opacity";
         if (shot == "both") view.source = kSourceBoth, view.mesh = kMeshOff;
         if (shot == "wire") view.mesh = kMeshWire, view.labels = false;
-        // right controller pointing at the panel's "Ask again" button
+        // right controller pointing at the panel's "Ask again" button, or dragging the overlay opacity slider
+        int target = kBtnRefresh;
+        float at = 0.5f;
+        if (shot == "opacity") {
+            view.overlay_opacity = 40, view.panel_opacity = 75;
+            target = d.panel.dragging = kSliderOverlay;
+            at = 0.4f;
+        }
+        d.panel.mr = &st, d.panel.view = &view;
+        std::vector<FlatVertex> rects;
+        std::vector<TexVertex> glyphs;
+        scene.panel.build(d.panel, rects, glyphs);  // where the controls are
+        const PanelItem *it = scene.panel.item(target);
+        float tu = it->slider ? it->track0 + (it->track1 - it->track0) * at : (it->x0 + it->x1) / 2, tv = (it->y0 + it->y1) / 2;
         d.aim_valid[1] = d.grip_valid[1] = true;
         d.grip[1] = Pose(Quat::axis_angle({1, 0, 0}, deg(-40)), user.apply({0.18f, -0.35f, -0.35f}));
-        Vec3 from = d.grip[1].p + Vec3(0, 0.02f, -0.04f), to = scene.panel.pose.apply({-0.12f, 0.2f, 0});
+        Vec3 from = d.grip[1].p + Vec3(0, 0.02f, -0.04f),
+             to = scene.panel.pose.apply({(tu - scene.panel.width / 2) * scene.panel.px,
+                                          (scene.panel.height / 2 - tv) * scene.panel.px, 0});
         d.aim[1] = look_at(from, to);
-        d.panel.hover = kBtnRefresh;
-        if (shot != "room") cam = look_at(eye, eye + Vec3(-0.6f, -0.35f, -1.0f)), d.aim_valid[1] = d.grip_valid[1] = false;
+        d.panel.hover = target;
+        if (shot != "room" && shot != "opacity") cam = look_at(eye, eye + Vec3(-0.6f, -0.35f, -1.0f)), d.aim_valid[1] = d.grip_valid[1] = false;
         else eye = cam_at;
+    } else if (shot == "eye") {
+        // what one eye sees from where the user stands: ~25 pixels per degree like a Quest 3 or Steam Frame
+        cam = look_at(eye, scene.panel.pose.p);
+        hfov = 32;
     } else if (shot == "overview") {
         d.show_panel = false;
         eye = Vec3(2.0f, 2.35f, 1.05f);
@@ -157,6 +181,26 @@ int main(int argc, char **argv) {
     }
     d.head = Pose(cam.q, eye);
 
+    // the panel's texture, as the app renders it for its quad layer
+    GLuint panel_tex = 0, panel_fbo = 0;
+    if (d.show_panel) {
+        int pw = scene.panel_texture_width(), ph = scene.panel_texture_height();
+        int levels = 1;
+        for (int s = std::max(pw, ph); s > 1; s /= 2) ++levels;
+        glGenTextures(1, &panel_tex);
+        glBindTexture(GL_TEXTURE_2D, panel_tex);
+        glTexStorage2D(GL_TEXTURE_2D, levels, GL_SRGB8_ALPHA8, pw, ph);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glGenFramebuffers(1, &panel_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, panel_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, panel_tex, 0);
+        scene.render_panel(d, pw, ph);
+        glBindTexture(GL_TEXTURE_2D, panel_tex);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    }
+
     glViewport(0, 0, W, H);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -168,7 +212,9 @@ int main(int argc, char **argv) {
     (void)vfov;
     XrFovf fov{-std::atan(ax), std::atan(ax), std::atan(ay), -std::atan(ay)};
     Mat4 view_m = Mat4::from_pose(cam.inverse());
-    scene.draw(Mat4::projection(fov, 0.05f, 50.0f) * view_m, d);
+    Mat4 view_proj = Mat4::projection(fov, 0.05f, 50.0f) * view_m;
+    scene.draw(view_proj, d);
+    if (panel_tex) scene.composite_panel(view_proj, panel_tex);  // the compositor: quad layers over the projection
 
     std::vector<unsigned char> px(W * H * 4);
     glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());

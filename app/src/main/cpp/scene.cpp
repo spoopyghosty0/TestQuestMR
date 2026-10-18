@@ -27,9 +27,12 @@ const Vec3 kAnchorColor(1.0f, 0.82f, 0.2f), kStageColor(0.1f, 0.9f, 0.85f), kMet
 struct Batches {
     std::vector<FlatVertex> solid;  // opaque lines (ribbons), depth-written
     std::vector<FlatVertex> fill;   // translucent faces, not depth-written
-    std::vector<FlatVertex> text;   // labels, always on top
+    std::vector<FlatVertex> text;   // label plates, always on top
+    std::vector<TexVertex> glyphs;  // label text
     Vec3 eye;
     float scale = 1.0f;
+    float outline = 1.0f;  // alpha of lines (the overlay opacity)
+    float plate = 0.93f;   // alpha of label plates
 };
 
 FlatVertex fv(const Vec3 &p, const Vec3 &c, float a) { return {p.x, p.y, p.z, c.x, c.y, c.z, a}; }
@@ -42,7 +45,7 @@ void ribbon(Batches &b, const Vec3 &p, const Vec3 &q, float width, const Vec3 &c
     if (length(side) < 1e-6f) side = cross(d, Vec3(0, 1, 0));
     side = normalize(side) * (width * 0.5f * b.scale);
     Vec3 v[4] = {p - side, p + side, q + side, q - side};
-    for (int k : {0, 1, 2, 0, 2, 3}) b.solid.push_back(fv(v[k], c, a));
+    for (int k : {0, 1, 2, 0, 2, 3}) b.solid.push_back(fv(v[k], c, a * b.outline));
 }
 
 void dashed(Batches &b, const Vec3 &p, const Vec3 &q, float width, const Vec3 &c, float a, float dash = 0.08f) {
@@ -118,8 +121,8 @@ std::string fmt2(const char *f, float a, float b2) {
 void label(Batches &b, const Vec3 &at, const Vec3 &color, const std::vector<std::string> &lines) {
     float dist = std::max(0.5f, length(at - b.eye));
     float m = 0.0016f * std::min(2.2f, dist);  // further away: a bit bigger, still readable at 4 m
-    const float c[4] = {color.x, color.y, color.z, 1}, plate[4] = {0.01f, 0.012f, 0.018f, 0.93f};
-    world_label(b.text, facing(at, b.eye), m, lines, c, plate);
+    const float c[4] = {color.x, color.y, color.z, 1}, plate[4] = {0.01f, 0.012f, 0.018f, b.plate};
+    world_label(b.text, b.glyphs, facing(at, b.eye), m, lines, c, plate);
 }
 
 }  // namespace
@@ -193,6 +196,10 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
     Batches b;
     b.eye = d.head.p;
     b.scale = d.line_scale;
+    // overlay opacity: fills and the mesh fade out completely, outlines and label plates keep a faint minimum
+    const float ov = std::clamp(view.overlay_opacity, 0, 100) / 100.0f;
+    b.outline = 0.25f + 0.75f * ov;
+    b.plate = 0.93f * (0.35f + 0.65f * ov);
     for (auto &m : meshes_) m.second.used = false;
 
     struct Shown {
@@ -246,7 +253,7 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
                     const int faces[6][4] = {{0, 1, 3, 2}, {4, 5, 7, 6}, {0, 1, 5, 4},
                                              {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 3, 7, 5}};
                     for (auto &f : faces)
-                        for (int k : {0, 1, 2, 0, 2, 3}) b.fill.push_back(fv(c[f[k]], color, 0.16f));
+                        for (int k : {0, 1, 2, 0, 2, 3}) b.fill.push_back(fv(c[f[k]], color, 0.16f * ov));
                 }
                 Vec3 top = P.apply({(lo.x + hi.x) / 2, (lo.y + hi.y) / 2, hi.z});
                 label_at = top + Vec3(0, 0.14f, 0);
@@ -273,7 +280,7 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
                 if (!s.overlay && !invisible) {
                     bool wall = e.labels.find("WALL") != std::string::npos;
                     float alpha = wall ? 0.09f : 0.2f;
-                    for (int i : triangulate(poly)) b.fill.push_back(fv(world(poly[i]), color, alpha));
+                    for (int i : triangulate(poly)) b.fill.push_back(fv(world(poly[i]), color, alpha * ov));
                 }
                 bool horizontal = std::fabs(P.q.rotate({0, 0, 1}).y) > 0.7f;
                 label_at = horizontal ? P.p + Vec3(0, 0.05f, 0) : P.apply({0, 0, 0.04f});
@@ -354,7 +361,8 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
         if (view.labels) label(b, stage_label, kStageColor, text);
     }
 
-    // controllers: grip marker, aim ray, cursor on the panel
+    // controllers: grip marker, aim ray up to the panel (the cursor is drawn on the panel)
+    b.outline = 1;
     for (int h = 0; h < 2; ++h) {
         if (d.grip_valid[h]) renderer.draw_mesh(renderer.sphere, Mat4::from_pose(d.grip[h], 0.012f), {0.9f, 0.9f, 0.95f}, 1.0f);
         if (!d.aim_valid[h]) continue;
@@ -364,38 +372,26 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
         if (on_panel) len = length(hit - d.aim[h].p);
         Vec3 col = h == 0 ? Vec3(0.3f, 0.6f, 1.0f) : Vec3(1.0f, 0.5f, 0.1f);
         ribbon(b, d.aim[h].p, d.aim[h].apply({0, 0, -len}), 0.004f, col, 0.8f);
-        if (on_panel) renderer.draw_mesh(renderer.sphere, Mat4::from_pose(Pose(Quat(), hit), 0.007f), col, 1.0f);
     }
 
     // 1: lines (depth-written)
     renderer.draw_flat(b.solid);
     // 2: the mesh, translucent faces and the wireframe, without depth writes (nothing hides the planes and volumes)
     glDepthMask(GL_FALSE);
-    for (auto &m : mesh_draws)
-        if (view.mesh == kMeshShaded || view.mesh == kMeshBoth)
-            renderer.draw_mesh(m.first->shaded, m.second, {0.8f, 0.8f, 0.8f}, 0.3f, true);
-    renderer.draw_flat(b.fill);
-    for (auto &m : mesh_draws)
-        if (view.mesh == kMeshWire || view.mesh == kMeshBoth)
-            renderer.draw_buffer(m.first->wire, GL_LINES, m.second, view.mesh == kMeshWire ? 0.9f : 0.35f);
+    if (ov > 0.005f) {
+        for (auto &m : mesh_draws)
+            if (view.mesh == kMeshShaded || view.mesh == kMeshBoth)
+                renderer.draw_mesh(m.first->shaded, m.second, {0.8f, 0.8f, 0.8f}, 0.3f * ov, true);
+        renderer.draw_flat(b.fill);
+        for (auto &m : mesh_draws)
+            if (view.mesh == kMeshWire || view.mesh == kMeshBoth)
+                renderer.draw_buffer(m.first->wire, GL_LINES, m.second, (view.mesh == kMeshWire ? 0.9f : 0.35f) * ov);
+    }
     glDepthMask(GL_TRUE);
-    // 4: labels and the panel on top of everything
+    // 3: labels on top of everything
     glDisable(GL_DEPTH_TEST);
     renderer.draw_flat(b.text);
-    if (d.show_panel) {
-        d.panel.mr = d.mr;
-        d.panel.view = d.view;
-        std::vector<FlatVertex> tris;
-        panel.build(d.panel, tris);
-        renderer.draw_flat(tris);
-        for (int h = 0; h < 2; ++h) {  // the cursor stays visible on the panel
-            float u, v;
-            Vec3 hit;
-            if (d.aim_valid[h] && panel.hit(d.aim[h], u, v, hit))
-                renderer.draw_mesh(renderer.sphere, Mat4::from_pose(Pose(Quat(), hit), 0.006f),
-                                   h == 0 ? Vec3(0.3f, 0.6f, 1.0f) : Vec3(1.0f, 0.5f, 0.1f), 1.0f);
-        }
-    }
+    renderer.draw_text(b.glyphs, label_atlas().texture());
     glEnable(GL_DEPTH_TEST);
 
     // meshes nobody showed this frame: free them
@@ -408,4 +404,90 @@ void Scene::draw(const Mat4 &view_proj, SceneData &d) {
             ++it;
         }
     }
+}
+
+void Scene::render_panel(SceneData &d, int w, int h) {
+    glViewport(0, 0, w, h);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    // panel units -> clip space, y down
+    Mat4 ortho = Mat4::identity();
+    ortho.m[0] = 2 / panel.width;
+    ortho.m[5] = -2 / panel.height;
+    ortho.m[12] = -1;
+    ortho.m[13] = 1;
+    renderer.begin_eye(ortho);
+    d.panel.mr = d.mr;
+    d.panel.view = d.view;
+    std::vector<FlatVertex> rects;
+    std::vector<TexVertex> glyphs;
+    panel.build(d.panel, rects, glyphs);
+    // the pointers over the text. The panel is a quad layer, which compositors draw over the projection layer (the
+    // Steam Frame always does), so it would cover the part of the ray in front of it: the ray is drawn here too, as
+    // seen from the head on the panel's plane, up to the cursor (a dot with a dark ring).
+    std::vector<FlatVertex> cursors;
+    Vec3 normal = panel.pose.q.rotate({0, 0, 1});
+    Pose to_panel = panel.pose.inverse();
+    auto on_panel = [&](const Vec3 &p, float &u, float &v, float &scale) {
+        float den = dot(p - d.head.p, normal);
+        if (std::fabs(den) < 1e-5f) return false;
+        scale = dot(panel.pose.p - d.head.p, normal) / den;  // > 1: the point is nearer than the panel
+        if (scale <= 0 || scale > 20) return false;
+        Vec3 l = to_panel.apply(d.head.p + (p - d.head.p) * scale);
+        u = l.x / panel.px + panel.width / 2;
+        v = panel.height / 2 - l.y / panel.px;
+        return true;
+    };
+    for (int hand = 0; hand < 2; ++hand) {
+        float u, v;
+        Vec3 hit;
+        if (!d.aim_valid[hand] || !panel.hit(d.aim[hand], u, v, hit)) continue;
+        Vec3 col = hand == 0 ? Vec3(0.3f, 0.6f, 1.0f) : Vec3(1.0f, 0.5f, 0.1f);
+        Vec3 from = d.aim[hand].p;
+        float u0, v0, s0;
+        bool ok = false;
+        for (int k = 0; k < 6 && !(ok = on_panel(from, u0, v0, s0)); ++k) from = lerp(from, hit, 0.5f);
+        if (ok) {
+            float w1 = 0.002f / panel.px, w0 = w1 * s0;  // half widths of the 4 mm ribbon
+            float dx = u - u0, dy = v - v0, len = std::sqrt(dx * dx + dy * dy);
+            if (len > 0.5f) {
+                float nx = -dy / len, ny = dx / len;
+                FlatVertex q[4] = {fv({u0 - nx * w0, v0 - ny * w0, 0}, col, 0.8f), fv({u0 + nx * w0, v0 + ny * w0, 0}, col, 0.8f),
+                                   fv({u + nx * w1, v + ny * w1, 0}, col, 0.8f), fv({u - nx * w1, v - ny * w1, 0}, col, 0.8f)};
+                for (int k : {0, 1, 2, 0, 2, 3}) cursors.push_back(q[k]);
+            }
+        }
+        const int n = 24;
+        for (int ring = 0; ring < 2; ++ring) {
+            float r = ring ? 4.5f : 6.5f;
+            Vec3 c = ring ? col : Vec3(0.01f, 0.01f, 0.015f);
+            for (int k = 0; k < n; ++k) {
+                float a0 = 2 * kPi * k / n, a1 = 2 * kPi * (k + 1) / n;
+                cursors.push_back(fv({u, v, 0}, c, 1));
+                cursors.push_back(fv({u + r * std::cos(a0), v + r * std::sin(a0), 0}, c, 1));
+                cursors.push_back(fv({u + r * std::cos(a1), v + r * std::sin(a1), 0}, c, 1));
+            }
+        }
+    }
+    renderer.draw_flat(rects);
+    renderer.draw_text(glyphs, panel_atlas().texture());
+    renderer.draw_flat(cursors);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void Scene::composite_panel(const Mat4 &view_proj, GLuint texture) {
+    renderer.begin_eye(view_proj);
+    auto corner = [&](float x, float y) { return panel.pose.apply({x * panel.width * panel.px / 2, y * panel.height * panel.px / 2, 0}); };
+    Vec3 tl = corner(-1, 1), tr = corner(1, 1), br = corner(1, -1), bl = corner(-1, -1);
+    // GL textures start at the bottom row: the panel's top is at v = 1
+    std::vector<TexVertex> q = {
+        {tl.x, tl.y, tl.z, 0, 1, 1, 1, 1, 1}, {tr.x, tr.y, tr.z, 1, 1, 1, 1, 1, 1}, {br.x, br.y, br.z, 1, 0, 1, 1, 1, 1},
+        {tl.x, tl.y, tl.z, 0, 1, 1, 1, 1, 1}, {br.x, br.y, br.z, 1, 0, 1, 1, 1, 1}, {bl.x, bl.y, bl.z, 0, 0, 1, 1, 1, 1},
+    };
+    glDisable(GL_DEPTH_TEST);
+    renderer.draw_image(q, texture);
+    glEnable(GL_DEPTH_TEST);
 }

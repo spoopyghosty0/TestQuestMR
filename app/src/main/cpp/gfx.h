@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "font.h"
 #include "xmath.h"
 
 struct Gl {
@@ -53,10 +54,17 @@ public:
     void draw_flat(const std::vector<FlatVertex> &triangles);
     void draw_lines(const std::vector<FlatVertex> &lines);
     void draw_buffer(const FlatBuffer &buffer, GLenum mode, const Mat4 &model, float alpha_scale = 1.0f);
+    // Glyph quads: colour x the R8 texture's coverage.
+    void draw_text(const std::vector<TexVertex> &quads, GLuint atlas);
+    // An RGBA texture with premultiplied alpha (the panel, where no compositor layer shows it).
+    void draw_image(const std::vector<TexVertex> &quads, GLuint texture);
     Mesh sphere;  // unit sphere for markers
 
 private:
-    GLuint lit_ = 0, flat_ = 0;
+    GLuint lit_ = 0, flat_ = 0, tex_ = 0;
+    GLint tex_mvp_ = -1, tex_image_ = -1;
+    GLuint tex_vao_ = 0, tex_vbo_ = 0;
+    void textured(const std::vector<TexVertex> &v, GLuint texture, bool image);
     GLint lit_mvp_ = -1, lit_model_ = -1, lit_color_ = -1, lit_alpha_ = -1, lit_normal_color_ = -1, flat_mvp_ = -1,
           flat_alpha_ = -1;
     GLuint flat_vao_ = 0, flat_vbo_ = 0;
@@ -64,11 +72,11 @@ private:
     void flat(const std::vector<FlatVertex> &v, GLenum mode);
 };
 
-// Framebuffers for one swapchain (one per image) with a shared depth buffer.
+// Framebuffers for one swapchain (one per image) with a shared depth buffer (if `depth_buffer`).
 struct EyeTarget {
     std::vector<GLuint> fbos;
     GLuint depth = 0;
     int width = 0, height = 0;
-    void create(const std::vector<GLuint> &color_textures, int w, int h);
+    void create(const std::vector<GLuint> &color_textures, int w, int h, bool depth_buffer = true);
     void release();
 };
