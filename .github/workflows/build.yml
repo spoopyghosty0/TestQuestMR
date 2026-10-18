@@ -1,0 +1,101 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: [frameport-install.json]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v6.4.0
+
+      - name: NDK and CMake
+        run: |
+          # explicit install (with retries): Gradle's on-demand NDK download fails now and then
+          for i in 1 2 3; do
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "cmake;3.22.1" > /dev/null \
+              && break
+            echo "sdkmanager failed, retrying"; sleep 10
+          done
+          test -d "$ANDROID_HOME/ndk/27.2.12479018"
+
+      - name: Release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.TQMR_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "TQMR_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        env:
+          TQMR_KEYSTORE_PASSWORD: ${{ secrets.TQMR_KEYSTORE_PASSWORD }}
+          TQMR_KEY_ALIAS: ${{ secrets.TQMR_KEY_ALIAS }}
+          TQMR_KEY_PASSWORD: ${{ secrets.TQMR_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Name the APK
+        run: |
+          version=$(sed -n 's/.*versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk "out/TestQuestMR-$version.apk"
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: TestQuestMR-${{ env.VERSION }}
+          path: out/*.apk
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ "$tag" != "v$VERSION" ]; then
+            echo "tag $tag doesn't match versionName $VERSION"; exit 1
+          fi
+          if [ -z "$TQMR_KEYSTORE" ]; then
+            echo "no release keystore: refusing to publish a debug-signed release"; exit 1
+          fi
+          apk="out/TestQuestMR-$VERSION.apk"
+          python3 tools/make_install_manifest.py --apk "$apk" --tag "$tag" --repo "$GITHUB_REPOSITORY" \
+            --out out/frameport-install.json
+          (cd out && sha256sum *.apk frameport-install.json > SHA256SUMS.txt)
+          gh release create "$tag" out/*.apk out/frameport-install.json out/SHA256SUMS.txt \
+            --title "Test Quest MR $VERSION" --notes-from-tag
+
+      - name: Point the install button at the new release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # the README's button reads frameport-install.json from main via raw.githubusercontent.com (CORS-readable,
+          # so frameport.app/install can show the app's name and icon; release downloads aren't)
+          git fetch -q origin main
+          git checkout -q -B main origin/main
+          cp out/frameport-install.json frameport-install.json
+          if ! git diff --quiet -- frameport-install.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+            git commit -q -m "frameport-install.json for ${GITHUB_REF_NAME}" -- frameport-install.json
+            git push -q origin main
+          fi
