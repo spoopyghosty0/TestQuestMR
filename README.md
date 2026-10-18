@@ -36,7 +36,7 @@ Steam Frame: use the button (needs [FramePort](https://frameport.app)). Quest: s
 - **Boundary:** the STAGE bounds on the floor; hide or show the guardian with `XR_META_boundary_visibility`.
 - **Anchors:** squeeze a grip to place one; save, erase and load through `xrSaveSpaceFB` / `xrSaveSpacesMETA`,
   `xrEraseSpaceFB` / `xrEraseSpacesMETA`, `xrQuerySpacesFB` / `xrDiscoverSpacesMETA`.
-- **Scene capture:** `xrRequestSceneCaptureFB`, then the room is asked for again.
+- **New room scan:** `xrRequestSceneCaptureFB` (Quest: Space Setup; Steam Frame with FramePort: a headset room scan), shows the scan running, then asks for the room again.
 - **Log:** every call and event, also in logcat (tag `TQMR`) and in `mr-log.txt` in the app's files folder
   (`Android/data/io.github.spoopyghosty0.testquestmr/files`), next to `room-fb.txt` / `room-meta.txt` (what each
   path returned).

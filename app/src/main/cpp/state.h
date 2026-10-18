@@ -113,8 +113,10 @@ struct MrState {
     XrResult boundary_request_result = kNotCalled;
     bool boundary_suppress_requested = false;
 
-    // XR_FB_scene_capture
+    // XR_FB_scene_capture ("New room scan"); times from MrLog's clock
     std::string capture_status;
+    bool capture_running = false;
+    double capture_started = 0, capture_done_at = -1;
     // XR_FB_triangle_mesh: the global mesh handed back to the runtime as an XrTriangleMeshFB
     std::string triangle_mesh_status;
     std::string passthrough;  // how passthrough runs, or why not

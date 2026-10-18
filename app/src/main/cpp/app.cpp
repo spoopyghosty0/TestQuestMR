@@ -554,8 +554,9 @@ void App::press(int id, int hand) {
             else mr_.refresh(), say("asked again: FB query, META discovery, EXT planes, STAGE bounds");
             break;
         case kBtnCapture:
-            if (demo_) say("demo mode: nothing to capture");
-            else mr_.scene_capture(), say("xrRequestSceneCaptureFB: " + st.capture_status);
+            if (demo_) say("demo mode: no room scan (delete the demo file to use the runtime's)");
+            else if (st.capture_running) say("a room scan is already running");
+            else mr_.scene_capture();
             break;
         case kBtnBoundaryVis: mr_.request_boundary(!st.boundary_suppress_requested); break;
         case kBtnRecenter: placed_ = false; break;

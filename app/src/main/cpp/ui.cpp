@@ -157,7 +157,10 @@ void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t, std::vector
     x = text(t, 16, y + 4, 1, "From", kDim) + 10;
     x = button(t, info, kBtnSource, x, y, std::string("Source: ") + source_mode_name(view.source), true, 150);
     x = button(t, info, kBtnRefresh, x, y, "Ask again");
-    x = button(t, info, kBtnCapture, x, y, "Scene capture");
+    x = button(t, info, kBtnCapture, x, y,
+               mr.capture_running ? fmt("Scanning... %.0f s", MrLog::get().clock() - mr.capture_started)
+                                  : "New room scan",
+               mr.capture_running, 110);
     x = button(t, info, kBtnBoundaryVis, x, y,
                mr.boundary_suppress_requested ? "Boundary: show" : "Boundary: hide");
     button(t, info, kBtnRecenter, x, y, "Recenter panel");
@@ -166,7 +169,10 @@ void Panel::build(const PanelInfo &info, std::vector<FlatVertex> &t, std::vector
     x = slider(t, info, kSliderOverlay, x, y, "Room overlay", view.overlay_opacity, 220);
     slider(t, info, kSliderPanel, x + 36, y, "Panel background", view.panel_opacity, 160);
     y += 24;
-    if (!info.message.empty()) text(t, 16, y + 2, 1, fit_text(info.message, width - 32), kWarn);
+    // a running scan (and its result, for 15 s) takes the message line
+    bool scan_line = mr.capture_running || (mr.capture_done_at >= 0 && MrLog::get().clock() - mr.capture_done_at < 15);
+    if (scan_line) text(t, 16, y + 2, 1, fit_text(mr.capture_status, width - 32), mr.capture_running ? kHead : kWarn);
+    else if (!info.message.empty()) text(t, 16, y + 2, 1, fit_text(info.message, width - 32), kWarn);
     y += 14;
     rect(t, 12, y, width - 12, y + 1, kRule, 0.001f);
     y += 8;
@@ -233,7 +239,7 @@ void Panel::runtime_tab(std::vector<FlatVertex> &t, const PanelInfo &info, float
     row("Scene permission", mr.permission.empty() ? "-" : mr.permission,
         mr.permission.rfind("granted", 0) == 0 ? kGood : mr.permission.empty() ? kText : kBad);
     row("Passthrough", mr.passthrough.empty() ? "-" : mr.passthrough, kText);
-    row("Scene capture", mr.capture_status.empty() ? "-" : mr.capture_status, kText);
+    row("Room scan (capture)", mr.capture_status.empty() ? "-" : mr.capture_status, kText);
     row("XR_FB_triangle_mesh", mr.triangle_mesh_status.empty() ? "-" : mr.triangle_mesh_status,
         mr.triangle_mesh_status.find("SUCCESS") != std::string::npos ? kGood : kText);
 }

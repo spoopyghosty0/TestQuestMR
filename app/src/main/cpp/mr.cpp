@@ -578,7 +578,7 @@ void Mr::retrieve_fb(XrAsyncRequestIdFB id, Pending &p) {
         int rooms = 0;
         for (const Entity &e : set.entities) rooms += e.is_room;
         if (!rooms) {
-            set.status = "no room: the ROOM_LAYOUT query found nothing (set up the room: Scene capture)";
+            set.status = "no room: the ROOM_LAYOUT query found nothing (New room scan asks for one)";
             set.status_level = 2;
         }
         query_children(set);
@@ -653,7 +653,7 @@ void Mr::finish_set(RoomSet &set, const char *how) {
         failures += e.failures;
     }
     if (set.entities.empty()) {
-        set.status = "nothing found (is a room set up? Scene capture asks for one)";
+        set.status = "nothing found (is a room set up? New room scan asks for one)";
         set.status_level = 2;
         MLOG("%s %s: nothing found", set.short_name.c_str(), how);
         return;
@@ -854,7 +854,13 @@ void Mr::update(XrTime time) {
     // requests that never answered
     double now = MrLog::get().clock();
     for (auto it = pending_.begin(); it != pending_.end();) {
-        if (now - it->second.started > 20 && it->second.kind != Req::Capture) {
+        if (it->second.kind == Req::Capture && now - it->second.started > 600) {
+            MWARN("room scan %llu: no answer after 10 min", (unsigned long long)it->first);
+            st.capture_running = false;
+            st.capture_done_at = now;
+            st.capture_status = "room scan: no answer after 10 min";
+            it = pending_.erase(it);
+        } else if (now - it->second.started > 20 && it->second.kind != Req::Capture) {
             MWARN("request %llu: no answer after 20 s", (unsigned long long)it->first);
             if (it->second.set && it->second.kind != Req::SetStatus) {
                 it->second.set->status = "no answer after 20 s (request " + std::to_string(it->first) + ")";
@@ -898,7 +904,7 @@ bool Mr::handle_event(const XrEventDataBuffer &ev) {
                 // a query that found nothing may complete without a results-available event
                 if (p.kind == Req::FbRooms && p.set->entities.empty()) {
                     p.set->status = XR_SUCCEEDED(e->result) || e->result == XR_ERROR_SPACE_COMPONENT_NOT_ENABLED_FB
-                                        ? "no room: the ROOM_LAYOUT query found nothing (set up the room: Scene capture)"
+                                        ? "no room: the ROOM_LAYOUT query found nothing (New room scan asks for one)"
                                         : std::string("room query completed with ") + xr_result_str(e->result);
                     p.set->status_level = 2;
                     p.set->updated = MrLog::get().clock();
@@ -1050,7 +1056,15 @@ bool Mr::handle_event(const XrEventDataBuffer &ev) {
                              (unsigned long long)e->requestId, xr_result_str(e->result));
             Pending p{};
             take(e->requestId, p);
-            st.capture_status = std::string("capture complete: ") + xr_result_str(e->result) + " - asked again";
+            double took = MrLog::get().clock() - st.capture_started;
+            st.capture_running = false;
+            st.capture_done_at = MrLog::get().clock();
+            char msg[160];
+            snprintf(msg, sizeof msg,
+                     XR_SUCCEEDED(e->result) ? "room scan finished after %.0f s (%s): room asked for again"
+                                             : "room scan failed after %.0f s: %s (the old room stays)",
+                     took, xr_result_str(e->result));
+            st.capture_status = msg;
             refresh();
             return true;
         }
@@ -1089,8 +1103,11 @@ void Mr::scene_capture() {
     XrResult r = xrRequestSceneCaptureFB_(session_, &info, &id);
     MrLog::get().add(XR_FAILED(r) ? 2 : 0, "xrRequestSceneCaptureFB -> %s request %llu", xr_result_str(r),
                      (unsigned long long)id);
-    st.capture_status = XR_SUCCEEDED(r) ? "requested, waiting for the event..."
+    st.capture_status = XR_SUCCEEDED(r) ? "room scan running: look around the floor, walls and furniture"
                                         : std::string("xrRequestSceneCaptureFB -> ") + xr_result_str(r);
+    st.capture_running = XR_SUCCEEDED(r);
+    st.capture_started = MrLog::get().clock();
+    if (!st.capture_running) st.capture_done_at = st.capture_started;
     if (XR_SUCCEEDED(r)) track(id, Req::Capture);
 }
 

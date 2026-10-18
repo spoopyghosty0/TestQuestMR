@@ -125,6 +125,12 @@ int main(int argc, char **argv) {
         // right controller pointing at the panel's "Ask again" button, or dragging the overlay opacity slider
         int target = kBtnRefresh;
         float at = 0.5f;
+        if (shot == "room") {  // pressing "New room scan": a scan in progress
+            target = kBtnCapture;
+            st.capture_running = true;
+            st.capture_started = MrLog::get().clock() - 14;
+            st.capture_status = "room scan running: look around the floor, walls and furniture";
+        }
         if (shot == "opacity") {
             view.overlay_opacity = 40, view.panel_opacity = 75;
             target = d.panel.dragging = kSliderOverlay;
