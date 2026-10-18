@@ -5,11 +5,13 @@
 
 namespace {
 
-// Deterministic UUIDs: "de305d54" + index, recognisable as demo data.
+// Deterministic UUIDs: index, then "de305d", recognisable as demo data; the index comes first so the short ids
+// (first 8 hex digits) differ.
 XrUuidEXT demo_uuid(int i) {
     XrUuidEXT u{};
-    const uint8_t head[6] = {0xde, 0x30, 0x5d, 0x54, 0x75, 0xb4};
+    const uint8_t head[6] = {0x00, 0xde, 0x30, 0x5d, 0x54, 0x75};
     for (int k = 0; k < 6; ++k) u.data[k] = head[k];
+    u.data[0] = (uint8_t)i;
     for (int k = 6; k < 16; ++k) u.data[k] = (uint8_t)((i * 131 + k * 29) & 0xff);
     u.data[15] = (uint8_t)i;
     return u;

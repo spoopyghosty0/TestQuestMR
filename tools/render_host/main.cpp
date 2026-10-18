@@ -86,16 +86,16 @@ int main(int argc, char **argv) {
     MLOG("event SPACE_QUERY_COMPLETE_FB request 1 -> XR_SUCCESS");
     MLOG("xrDiscoverSpacesMETA(no filter) -> XR_SUCCESS request 3");
     MLOG("event SPACE_DISCOVERY_RESULTS_AVAILABLE_META request 3");
-    MLOG("  mesh de305d54: %zu vertices, %zu triangles", st.fb.entities.back().mesh_vertices.size(),
+    MLOG("  mesh 13de305d: %zu vertices, %zu triangles", st.fb.entities.back().mesh_vertices.size(),
          st.fb.entities.back().mesh_indices.size() / 3);
     MLOG("xrCreateTriangleMeshFB(%zu triangles of the room mesh) -> XR_SUCCESS", st.fb.entities.back().mesh_indices.size() / 3);
-    MWARN("xrLocateSpace(META de305d54) -> XR_SUCCESS, flags rot+T pos+T");
-    MERR("  xrGetSpaceBoundingBox3DFB(de305d54) -> XR_ERROR_SPACE_COMPONENT_NOT_ENABLED_FB");
+    MWARN("xrLocateSpace(META 03de305d) -> XR_SUCCESS, flags rot+T pos+T");
+    MERR("  xrGetSpaceBoundingBox3DFB(09de305d) -> XR_ERROR_SPACE_COMPONENT_NOT_ENABLED_FB");
     MLOG("event BOUNDARY_VISIBILITY_CHANGED_META -> suppressed");
     MLOG("xrCreateSpatialAnchorFB(at -0.60 0.75 -1.25) -> XR_SUCCESS request 9");
-    MLOG("event SPATIAL_ANCHOR_CREATE_COMPLETE_FB request 9 -> XR_SUCCESS, anchor de305d54");
-    MLOG("xrSaveSpaceFB(de305d54, LOCAL) -> XR_SUCCESS request 10");
-    MLOG("event SPACE_SAVE_COMPLETE_FB request 10 de305d54 -> XR_SUCCESS");
+    MLOG("event SPATIAL_ANCHOR_CREATE_COMPLETE_FB request 9 -> XR_SUCCESS, anchor 0dde305d");
+    MLOG("xrSaveSpaceFB(0dde305d, LOCAL) -> XR_SUCCESS request 10");
+    MLOG("event SPACE_SAVE_COMPLETE_FB request 10 0dde305d -> XR_SUCCESS");
 
     ViewOptions view;
     SceneData d;
