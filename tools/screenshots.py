@@ -13,6 +13,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 SHOTS = {
     "room": "room",          # inside the room, with the panel
+    "opacity": "opacity",    # dragging the room overlay's opacity slider
     "overview": "overview",  # the whole room, no panel
     "fb-meta": "both",       # FB results with the META results drawn over them
     "mesh": "wire",          # the room mesh as a wireframe

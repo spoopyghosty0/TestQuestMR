@@ -18,7 +18,7 @@ Steam Frame: use the button (needs [FramePort](https://frameport.app)). Quest: s
 | ![The whole room](docs/screenshots/overview.png) Planes, volumes and the STAGE bounds | ![Room mesh](docs/screenshots/mesh.png) The room mesh as a wireframe |
 | ![FB and META results together](docs/screenshots/fb-meta.png) FB query and META discovery compared | ![Extensions and system properties](docs/screenshots/panel-runtime.png) Extensions, system properties, boundary |
 | ![Spaces table](docs/screenshots/panel-room.png) Every space with its components | ![Anchors](docs/screenshots/panel-anchors.png) Anchors: save, erase, load (FB and META) |
-| ![Call log](docs/screenshots/panel-log.png) Every call, its result and every event | |
+| ![Call log](docs/screenshots/panel-log.png) Every call, its result and every event | ![Opacity sliders](docs/screenshots/opacity.png) The overlay faded to 40 %, the panel to 75 % |
 
 <sub>Screenshots: the PC renderer with a made-up demo room, not a real headset.</sub>
 
@@ -41,7 +41,11 @@ Steam Frame: use the button (needs [FramePort](https://frameport.app)). Quest: s
   (`Android/data/io.github.spoopyghosty0.testquestmr/files`), next to `room-fb.txt` / `room-meta.txt` (what each
   path returned).
 
-Point at the panel and pull the trigger; the thumbstick scrolls lists. A file named `demo` in the files folder shows
+Point at the panel and pull the trigger; the thumbstick scrolls lists. The *Opacity* sliders (hold the trigger and
+drag, or point at one and push the thumbstick sideways for 5 % steps) fade the room visualisation, to compare it with
+the real room (fills and the mesh fade out completely, outlines and label plates keep a faint minimum), and the panel's
+background; both are kept in `settings.txt`. The panel is its own quad layer, rendered at 2 texels per layout unit
+with the system font (Roboto), so its text stays sharp. A file named `demo` in the files folder shows
 the demo room instead of the runtime's.
 
 ## Build
