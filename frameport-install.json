@@ -1,0 +1,15 @@
+{
+  "schema": "framedrop.install/v1",
+  "name": "Test Quest MR",
+  "version": "0.1.0",
+  "files": [
+    {
+      "url": "https://github.com/spoopyghosty0/TestQuestMR/releases/download/v0.1.0/TestQuestMR-0.1.0.apk",
+      "sha256": "18f29b569789fba8cad45f1df4f0037e3facce545ae2151af60926866c263f7f"
+    }
+  ],
+  "frameport": {
+    "description": "See what the headset's runtime delivers through the Meta mixed-reality APIs: room layout, planes, volumes, mesh, anchors and boundary, drawn where it puts them.",
+    "icon": "https://raw.githubusercontent.com/spoopyghosty0/TestQuestMR/main/docs/icon.png"
+  }
+}
